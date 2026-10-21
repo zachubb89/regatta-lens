@@ -1,0 +1,14 @@
+{
+  "name": "regatta-lens",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AR move helper for the Regatta sailing board game",
+  "scripts": {
+    "build": "node tools/build.js",
+    "test": "python3 tools/gen_scene.py test && node tools/test_engine.js test"
+  },
+  "devDependencies": {
+    "js-aruco2": "2.0.0",
+    "pngjs": "7.0.0"
+  }
+}

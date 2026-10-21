@@ -1,0 +1,93 @@
+<div class="app">
+  <header class="topbar">
+    <h1 class="wordmark">
+      <svg class="burgee" viewBox="0 0 18 14" aria-hidden="true"><path d="M1 1 L17 7 L1 13 Z" fill="#f2994a"/><path d="M1 1 L9 4 L9 10 L1 13 Z" fill="#e9eef5"/></svg>
+      <span class="wm-text">Regatta Lens <small>AR TACTICS</small></span>
+    </h1>
+    <nav class="modes" aria-label="Mode">
+      <button type="button" id="mode-photo" data-mode="photo" aria-pressed="true">Photo</button>
+      <button type="button" id="mode-live" data-mode="live" aria-pressed="false">Live</button>
+      <button type="button" id="mode-sandbox" data-mode="sandbox" aria-pressed="false">Sandbox</button>
+    </nav>
+    <button type="button" class="iconbtn" id="open-help" aria-label="How it works">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7.6 7.6a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="10" cy="14.6" r="1" fill="currentColor"/></svg>
+    </button>
+    <button type="button" class="iconbtn" id="open-settings" aria-label="Settings and markers">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 6.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 1.5v2.2M10 16.3v2.2M18.5 10h-2.2M3.7 10H1.5M16 4l-1.6 1.6M5.6 14.4 4 16M16 16l-1.6-1.6M5.6 5.6 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+  </header>
+
+  <main class="stage" id="stage">
+    <video id="video" playsinline muted hidden></video>
+    <canvas id="view" role="img" aria-label="Race course with move options drawn on top"></canvas>
+    <div class="hud">
+      <div class="gauge" id="gauge"></div>
+      <div class="order" id="order"></div>
+    </div>
+    <div class="banner" id="banner" hidden></div>
+    <div class="stage-cta" id="cta" hidden></div>
+    <div class="zoom" id="zoom">
+      <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+      <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
+    </div>
+  </main>
+
+  <section class="panel" aria-label="Selected boat">
+    <div class="panel-in" id="panel"></div>
+  </section>
+</div>
+
+<input type="file" id="file" accept="image/*" hidden>
+
+<div class="sheet-wrap" id="settings" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="sheet-in">
+      <div class="sheet-head"><h2 id="settings-title">Settings</h2><button type="button" class="btn" data-close>Done</button></div>
+      <h3>Cards &amp; wind</h3>
+      <div class="fields">
+        <label class="field" for="set-cardW">Card width, mm (one move)<input id="set-cardW" type="number" step="0.1" min="20" max="150" data-k="cardW"></label>
+        <label class="field" for="set-cardL">Card length, mm<input id="set-cardL" type="number" step="0.1" min="20" max="200" data-k="cardL"></label>
+        <label class="field" for="set-closeHauled">Close-hauled angle, °<input id="set-closeHauled" type="number" step="1" min="20" max="80" data-k="closeHauled"></label>
+        <label class="field" for="set-tickDeg">One dial tick, °<input id="set-tickDeg" type="number" step="1" min="5" max="45" data-k="tickDeg"></label>
+        <label class="field" for="set-lowest">Lowest "lower" angle, °<input id="set-lowest" type="number" step="5" min="60" max="180" data-k="lowest"></label>
+      </div>
+      <h3>Printed marker sizes (black square edge)</h3>
+      <div class="fields">
+        <label class="field" for="set-m-wind">Wind hub, mm<input id="set-m-wind" type="number" step="0.5" min="8" max="120" data-m="wind"></label>
+        <label class="field" for="set-m-course">Course base, mm<input id="set-m-course" type="number" step="0.5" min="8" max="120" data-m="course"></label>
+        <label class="field" for="set-m-boat">Boats, mm<input id="set-m-boat" type="number" step="0.5" min="8" max="80" data-m="boat"></label>
+        <label class="field" for="set-m-mark">Course marks, mm<input id="set-m-mark" type="number" step="0.5" min="8" max="80" data-m="mark"></label>
+      </div>
+      <div class="actions"><button type="button" class="btn" id="reset-settings">Reset to defaults</button></div>
+      <h3>Markers</h3>
+      <p>Each piece wears one square. The top edge is the boat's bow, the wind arrow's upwind end, and the course base's "toward the finish" side.</p>
+      <div class="marker-grid" id="marker-grid"></div>
+      <div class="actions"><button type="button" class="btn primary" id="save-markers">Save printable markers (PDF)</button></div>
+      <p class="status" id="save-status"></p>
+    </div>
+  </div>
+</div>
+
+<div class="sheet-wrap" id="help" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="help-title">
+    <div class="sheet-in">
+      <div class="sheet-head"><h2 id="help-title">How it works</h2><button type="button" class="btn" data-close>Done</button></div>
+      <p>Regatta Lens reads small black-and-white squares on your pieces, works out where every boat sits on the table, and draws your legal moves on top: how far each card takes you, who you'd steal wind from, who has right of way, and where the laylines are.</p>
+      <h3>Set up once</h3>
+      <ol>
+        <li>Print the marker sheet at 100% (Settings → Save printable markers). Matte paper; gloss glares.</li>
+        <li>Wind marker on the dial's rotating arrow hub, top edge upwind. Course marker on the fixed base, top edge toward the finish.</li>
+        <li>One boat marker flat on each meeple, top edge = bow. Course-mark markers on top of the cylinders.</li>
+      </ol>
+      <h3>On your turn</h3>
+      <ol>
+        <li>Photo: snap the table from above. Live: point the camera at it.</li>
+        <li>Tap your boat. Tap a move to see the cards laid out and what it costs you.</li>
+      </ol>
+      <h3>Reading the overlay</h3>
+      <p><b>Cards</b> show each Sail move along your close-hauled line. <b>Brown boxes</b> are wind shadows (sail through or end in one and you draw Dirty Air). <b>Green dashed boxes</b> are the area a starboard boat controls. <b>Red/green dashed lines</b> are the port and starboard laylines to the finish. The <b>dark wedge</b> is the no-sail zone.</p>
+      <h3>Live camera</h3>
+      <p>Phone browsers only allow the camera on a page you host yourself. This preview blocks it, so Live runs on the hosted copy at <a href="https://zachubb89.github.io/regatta-lens/" target="_blank" rel="noopener" style="color:var(--flag)">zachubb89.github.io/regatta-lens</a>. Photo mode works everywhere.</p>
+    </div>
+  </div>
+</div>
