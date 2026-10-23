@@ -6,8 +6,10 @@ import numpy as np
 import cv2
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else '.'
-S = 2.0                      # plane render scale, px per mm
-X0, X1, Y0, Y1 = -560, 640, -720, 380
+PHONE = len(sys.argv) > 2 and sys.argv[2] == 'phone'   # full 12 MP phone photo instead of the web sample
+S = 4.0 if PHONE else 2.5    # plane render scale, px per mm
+MK = 12.5                    # black square edge of every sticker, mm (15 mm sticker with a 1.25 mm white edge)
+X0, X1, Y0, Y1 = -720, 640, -900, 420
 W, H = int((X1 - X0) * S), int((Y1 - Y0) * S)
 TICK = 20
 DIAL = +1
@@ -37,6 +39,18 @@ for xs in range(X0, X1, 180):
 
 shadow = np.zeros((H, W), np.float32)
 
+SHIFT = 4  # sub-pixel vertex precision (1/16 px)
+
+def poly_exact(pts, color):
+    """Fill a convex polygon covering exactly its area: OpenCV fills include boundary pixels,
+    so pull every edge in by half a pixel (otherwise small shapes render ~1 px too big)."""
+    px = [((x - X0) * S - 0.5, (y - Y0) * S - 0.5) for x, y in pts]
+    cx = sum(p[0] for p in px) / len(px); cy = sum(p[1] for p in px) / len(px)
+    half = max(1.0, min(math.hypot(p[0] - cx, p[1] - cy) for p in px) / math.sqrt(2))
+    k = (half - 0.5) / half
+    arr = np.array([[(cx + (x - cx) * k) * (1 << SHIFT), (cy + (y - cy) * k) * (1 << SHIFT)] for x, y in px], np.int32)
+    cv2.fillPoly(img, [arr], color, cv2.LINE_8, SHIFT)
+
 def poly(pts, color, shadow_off=None):
     arr = np.array([P(*p) for p in pts], np.int32)
     if shadow_off:
@@ -57,12 +71,12 @@ def draw_marker(mid, center, size, up=(0, -1), quiet=0.25, quiet_color=(250, 250
         a = (i - 3) * cell; b = (j - 3) * cell
         return (center[0] + rx * a - ux * b, center[1] + ry * a - uy * b)
     q = 3 + quiet * 6
-    poly([(center[0] + rx * a - ux * b, center[1] + ry * a - uy * b) for a, b in
+    poly_exact([(center[0] + rx * a - ux * b, center[1] + ry * a - uy * b) for a, b in
           [(-q * cell, -q * cell), (q * cell, -q * cell), (q * cell, q * cell), (-q * cell, q * cell)]], quiet_color)
     for j in range(6):
         for i in range(6):
             col = (245, 245, 245) if bits[j, i] else (22, 22, 22)
-            poly([at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)], col)
+            poly_exact([at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)], col)
 
 truth = {'tickDeg': TICK, 'dial': DIAL, 'markers': {}}
 u = rot((0, -1), -DIAL * TICK)            # upwind direction
@@ -88,13 +102,13 @@ for d, col in ((port, (40, 40, 180)), (stbd, (70, 160, 90))):
     cv2.line(img, P(*D), P(*tip), col, int(12 * S), cv2.LINE_AA)
 dn = (-u[0], -u[1])
 cv2.line(img, P(*D), P(D[0] + dn[0] * 80, D[1] + dn[1] * 80), (35, 35, 35), int(22 * S), cv2.LINE_AA)
-draw_marker(0, D, 40, up=u, quiet=0.2)
+draw_marker(0, D, MK, up=u, quiet=0.1)
 truth['markers']['0'] = {'pos': D, 'up': u}
 
 # course placard (fixed, points down the course)
 CP = (-170, 255)
 poly([(CP[0] - 34, CP[1] - 40), (CP[0] + 34, CP[1] - 40), (CP[0] + 34, CP[1] + 40), (CP[0] - 34, CP[1] + 40)], (240, 240, 240), shadow_off=(3, 4))
-draw_marker(1, CP, 40, up=(0, -1), quiet=0.2)
+draw_marker(1, CP, MK, up=(0, -1), quiet=0.1)
 truth['markers']['1'] = {'pos': CP, 'up': (0, -1)}
 
 # finish marks (orange cylinder tops)
@@ -102,7 +116,7 @@ for mid, pos in ((20, (-110, -560)), (21, (250, -560))):
     cv2.circle(shadow, P(pos[0] + 6, pos[1] + 8), int(30 * S), 1.0, -1)
     circle(pos, 30, (40, 110, 220))
     circle(pos, 30, (30, 80, 170), 2)
-    draw_marker(mid, pos, 25, up=(0, -1), quiet=0.15)
+    draw_marker(mid, pos, MK, up=(0, -1), quiet=0.1)
     truth['markers'][str(mid)] = {'pos': pos, 'up': (0, -1)}
 
 # boats: id, colour (BGR), position, tack
@@ -123,7 +137,7 @@ for mid, col, pos, tack in BOATS:
     pts = [bow] + [(cc[0] + n[0] * math.cos(a) * r - h[0] * math.sin(a) * r,
                     cc[1] + n[1] * math.cos(a) * r - h[1] * math.sin(a) * r) for a in np.linspace(0, math.pi, 24)]
     poly(pts, col, shadow_off=(4, 6))
-    draw_marker(mid, pos, 20, up=h, quiet=0.18)
+    draw_marker(mid, pos, MK, up=h, quiet=0.1)
     truth['markers'][str(mid)] = {'pos': pos, 'up': h, 'tack': tack}
 
 # soft contact shadows
@@ -131,11 +145,24 @@ sh = cv2.GaussianBlur(shadow, (0, 0), 7) * 0.35
 img = np.clip(img.astype(np.float32) * (1 - sh[..., None]), 0, 255).astype(np.uint8)
 
 # ---------- photograph it ----------
-OW, OH = 1200, 1600
-quad_plane = np.float32([P(-470, -690), P(560, -650), P(390, 350), P(-430, 330)])
-quad_photo = np.float32([[0, 0], [OW, 0], [OW, OH], [0, OH]])
-M = cv2.getPerspectiveTransform(quad_plane, quad_photo)
+OW, OH = (3024, 4032) if PHONE else (1500, 2000)
+# a real pinhole camera: phone held ~1 m over the table, tilted forward a little, slight roll
+def rotx(a): c, s_ = math.cos(a), math.sin(a); return np.array([[1, 0, 0], [0, c, -s_], [0, s_, c]])
+def roty(a): c, s_ = math.cos(a), math.sin(a); return np.array([[c, 0, s_], [0, 1, 0], [-s_, 0, c]])
+def rotz(a): c, s_ = math.cos(a), math.sin(a); return np.array([[c, -s_, 0], [s_, c, 0], [0, 0, 1]])
+fpx = 0.75 * max(OW, OH)                         # ~26 mm-equivalent main camera
+K = np.array([[fpx, 0, OW / 2], [0, fpx, OH / 2], [0, 0, 1]])
+R0 = np.array([[1, 0, 0], [0, 1, 0], [0, 0, -1.0]])  # looking straight down: image x = table x, image y = table y
+R = rotz(math.radians(2.5)) @ rotx(math.radians(-12)) @ roty(math.radians(3)) @ R0
+Cw = np.array([-40.0, 60.0, 900.0])              # camera centre over the table, mm
+t = -R @ Cw
+Himg = K @ np.column_stack([R[:, 0], R[:, 1], t])   # table mm -> image px
+Hplane = np.array([[S, 0, -X0 * S], [0, S, -Y0 * S], [0, 0, 1.0]])  # table mm -> master render px
+M = Himg @ np.linalg.inv(Hplane)
+# render through an intermediate scale to get proper area filtering
 photo = cv2.warpPerspective(img, M, (OW, OH), flags=cv2.INTER_AREA, borderMode=cv2.BORDER_REFLECT)
+for name, (x, y) in {'top-left': (0, 0), 'bottom-right': (OW, OH)}.items():
+    v = np.linalg.inv(Himg) @ np.array([x, y, 1.0]); print(name, 'of photo sees table at', (v[:2] / v[2]).round())
 # light falloff + a warm lamp hotspot
 gy, gx = np.mgrid[0:OH, 0:OW].astype(np.float32)
 light = 0.78 + 0.32 * np.exp(-(((gx - OW * 0.62) / (OW * 0.8)) ** 2 + ((gy - OH * 0.35) / (OH * 0.7)) ** 2))
@@ -143,10 +170,11 @@ photo = np.clip(photo.astype(np.float32) * light[..., None], 0, 255)
 photo = cv2.GaussianBlur(photo, (0, 0), 0.8)
 photo = np.clip(photo + rng.normal(0, 3.5, photo.shape), 0, 255).astype(np.uint8)
 
-cv2.imwrite(f'{OUT}/sample.png', photo)
-cv2.imwrite(f'{OUT}/sample.jpg', photo, [cv2.IMWRITE_JPEG_QUALITY, 78])
-truth['M'] = M.tolist(); truth['S'] = S; truth['X0'] = X0; truth['Y0'] = Y0
-json.dump(truth, open(f'{OUT}/truth.json', 'w'), indent=1)
+tag = 'phone' if PHONE else 'sample'
+cv2.imwrite(f'{OUT}/{tag}.png', photo)
+cv2.imwrite(f'{OUT}/{tag}.jpg', photo, [cv2.IMWRITE_JPEG_QUALITY, 80])
+truth['M'] = M.tolist(); truth['focal_norm'] = fpx / (max(OW, OH) / 2); truth['S'] = S; truth['X0'] = X0; truth['Y0'] = Y0
+json.dump(truth, open(f'{OUT}/truth-{tag}.json', 'w'), indent=1)  # headings get their own random jitter per shot
 
 # OpenCV's own detector, as an independent reference
 det = cv2.aruco.ArucoDetector(ar, cv2.aruco.DetectorParameters())

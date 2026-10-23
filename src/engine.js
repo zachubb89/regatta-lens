@@ -36,7 +36,7 @@
     dial: 0,           // manual dial value when the dial marker is not in view
     collideR: 26,      // boats closer than this (centre to centre) are touching
     boatLen: 46, boatBeam: 30, // ghost meeple size
-    marker: { wind: 40, course: 40, boat: 20, mark: 25 }, // black square edge, mm
+    marker: { wind: 12.5, course: 12.5, boat: 12.5, mark: 12.5 }, // black square edge, mm (15 mm stickers)
   };
 
   function config(over) {
@@ -173,7 +173,9 @@
     const t00 = Math.hypot(B00, B10), q1 = { x: B00 / t00, y: B10 / t00 };
     const t01 = q1.x * B01 + q1.y * B11;
     const t11 = Math.hypot(B01 - t01 * q1.x, B11 - t01 * q1.y);
-    let p = [t00 / t11, t01 / t11, l1, l2];
+    // two starting points: the reference sticker's own perspective, and a flat-on view. A small sticker's
+    // perspective guess can be noisy enough to send the fit somewhere wrong; keep whichever fits better.
+    const starts = [[t00 / t11, t01 / t11, l1, l2], [t00 / t11, t01 / t11, 0, 0]];
 
     const Kof = (p) => [p[0], p[1], 0, 0, 1, 0, p[2], p[3], 1];
     const resid = (p) => {
@@ -192,16 +194,18 @@
       return { r, sigma };
     };
     const sq = (r) => r.reduce((a, v) => a + v * v, 0);
+    const fit = (p) => {
     let cur = resid(p), cost = sq(cur.r), lambda = 1e-3;
     for (let it = 0; it < 40; it++) {
       const J = [], h = 1e-6;
-      for (let k = 0; k < 4; k++) {
+      const ix = p.map((_, k) => k);
+      for (const k of ix) {
         const pp = p.slice(); pp[k] += h;
         const rr = resid(pp).r;
         J.push(rr.map((v, i) => (v - cur.r[i]) / h));
       }
-      const JTJ = [0, 1, 2, 3].map((a) => [0, 1, 2, 3].map((b) => J[a].reduce((s, v, i) => s + v * J[b][i], 0)));
-      const JTr = [0, 1, 2, 3].map((a) => J[a].reduce((s, v, i) => s + v * cur.r[i], 0));
+      const JTJ = ix.map((a) => ix.map((b) => J[a].reduce((s, v, i) => s + v * J[b][i], 0)));
+      const JTr = ix.map((a) => J[a].reduce((s, v, i) => s + v * cur.r[i], 0));
       let improved = false;
       for (let tries = 0; tries < 8 && !improved; tries++) {
         const A = JTJ.map((row, i) => row.map((v, j) => (i === j ? v * (1 + lambda) + 1e-12 : v)));
@@ -215,6 +219,11 @@
       }
       if (!improved) break;
     }
+    return { p, cur, cost };
+    };
+    let best = null;
+    for (const p0 of starts) { const f = fit(p0); if (!best || f.cost < best.cost) best = f; }
+    const { p, cur, cost } = best;
     // similarity from the reference marker, with the shared scale
     const K = Kof(p);
     const kq = ref.corners.map((c) => applyH(K, applyH(N, c)));
@@ -326,7 +335,11 @@
     let u, uSrc, dial = null;
     if (scene.windMarker) {
       u = scene.windMarker.up; uSrc = 'dial';
-      if (c) dial = -signedAngle(c, u) / DEG / cfg.tickDeg;
+      if (c) {
+        // the dial only rests on its ticks, so snap: this also absorbs a slightly crooked sticker
+        dial = -signedAngle(c, u) / DEG / cfg.tickDeg;
+        u = V.rot(c, -Math.round(dial) * cfg.tickDeg * DEG);
+      }
     } else {
       if (!c && screenUp) { c = screenUp; cSrc = 'screen'; }
       if (!c) { c = { x: 0, y: -1 }; cSrc = 'screen'; }

@@ -14,47 +14,100 @@
   // ---------- state ----------
   const st = {
     mode: 'photo',
-    cfg: E.config(store.get('cfg', null)),
+    cfg: E.config(store.get('cfg15', null)),
     layers: Object.assign({ moves: true, shadows: true, row: true, laylines: true, order: true }, store.get('layers', {})),
     selected: null,
     focus: null,
     manualDial: 0,
     sandbox: null,
     photo: { img: null, dets: [], scene: null, isSample: true, busy: false, error: null },
-    live: { stream: null, running: false, scene: null, res: 960, smooth: new Map(), lastPanel: 0, error: null },
+    live: { stream: null, running: false, busy: false, scene: null, smooth: new Map(), lastPanel: 0, lastSeen: 0, vw: 0, vh: 0, error: null },
     vt: { photo: { z: 1, x: 0, y: 0 }, sandbox: { z: 1, x: 0, y: 0 } },
   };
 
   // ---------- marker reading ----------
-  let detector = null;
-  function getDetector() {
-    if (detector) return detector;
-    if (!window.AR || !window.CV) return null;
-    AR.DICTIONARIES.REGATTA_4X4 = { nBits: 16, tau: 2, codeList: E.CODES };
-    detector = new AR.Detector({ dictionaryName: 'REGATTA_4X4' });
-    return detector;
-  }
+  // Full-resolution reading for 15 mm stickers. Runs in a background worker so the page
+  // stays responsive; falls back to the page itself if a worker can't start here.
+  const reader = (() => {
+    let worker = null, ready = null, seq = 0;
+    const pending = new Map();
+    const env = () => ({ AR: window.AR, CV: window.CV, codes: E.CODES, ids: [...KNOWN] });
+    function onPage(img) {
+      if (!window.AR || !window.CV || !window.RegattaReader) return null;
+      return window.RegattaReader.detect(img, env());
+    }
+    function drop() {
+      if (worker) worker.terminate();
+      worker = null;
+      for (const p of pending.values()) p(null);
+      pending.clear();
+    }
+    function start() {
+      const src = document.getElementById('reader-src'), urls = window.REGATTA_ARUCO_URLS || [];
+      if (!window.Worker || !window.Blob || !src || !urls.length) return Promise.resolve(false);
+      return new Promise((resolve) => {
+        let settled = false;
+        const settle = (ok) => { if (!settled) { settled = true; if (!ok) drop(); resolve(ok); } };
+        try {
+          const code = 'importScripts(' + urls.map((u) => JSON.stringify(u)).join(',') + ');\n' + src.textContent +
+            '\nvar env=null;onmessage=function(e){var d=e.data;if(!env)env={AR:self.AR,CV:self.CV,codes:d.codes,ids:d.ids};' +
+            'var out=self.RegattaReader.detect({width:d.width,height:d.height,data:new Uint8ClampedArray(d.buf)},env);postMessage({seq:d.seq,markers:out});};' +
+            'postMessage({ready:true});';
+          worker = new Worker(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })));
+          worker.onmessage = (e) => {
+            if (e.data.ready) { settle(true); return; }
+            const p = pending.get(e.data.seq);
+            if (p) { pending.delete(e.data.seq); p(e.data.markers); }
+          };
+          worker.onerror = (e) => { if (e.preventDefault) e.preventDefault(); settle(false); drop(); };
+          setTimeout(() => settle(false), 8000);
+        } catch (err) { settle(false); }
+      });
+    }
+    return {
+      // img: ImageData. Resolves to [{id, hd, corners}], or null when no reader could load.
+      async read(img) {
+        if (!ready) ready = start();
+        const usingWorker = (await ready) && !!worker;
+        window.__regattaReader = usingWorker ? 'worker' : 'page'; // handy when testing
+        if (usingWorker) {
+          const id = ++seq, buf = img.data.buffer.slice(0);
+          const out = await new Promise((resolve) => {
+            pending.set(id, resolve);
+            worker.postMessage({ seq: id, width: img.width, height: img.height, buf, codes: E.CODES, ids: [...KNOWN] }, [buf]);
+          });
+          if (out) return out;
+        }
+        return onPage(img);
+      },
+    };
+  })();
   const work = document.createElement('canvas');
   const wctx = work.getContext('2d', { willReadFrequently: true });
-  function detectFrom(src, sw, sh, maxSide) {
-    const d = getDetector();
-    if (!d) return null;
+  async function readFrom(src, sw, sh, maxSide) {
     const k = Math.min(1, maxSide / Math.max(sw, sh));
     const w = Math.round(sw * k), h = Math.round(sh * k);
     if (work.width !== w) work.width = w;
     if (work.height !== h) work.height = h;
     wctx.drawImage(src, 0, 0, w, h);
-    const img = wctx.getImageData(0, 0, w, h);
-    return d.detect(img).filter((m) => KNOWN.has(m.id)).map((m) => ({ id: m.id, hd: m.hammingDistance, corners: m.corners.map((c) => ({ x: c.x / k, y: c.y / k })) }));
+    const found = await reader.read(wctx.getImageData(0, 0, w, h));
+    if (!found) return null;
+    return found.filter((m) => KNOWN.has(m.id)).map((m) => ({ id: m.id, hd: m.hd, corners: m.corners.map((c) => ({ x: c.x / k, y: c.y / k })) }));
   }
-  function detectPhoto(img) {
+  // Photos: full resolution (capped where phone browsers cap canvases), plus a small pass
+  // that catches stickers filling a big part of a close-up.
+  async function readPhoto(img) {
     const iw = img.naturalWidth, ih = img.naturalHeight;
-    const a = detectFrom(img, iw, ih, 1600);
-    if (!a) return null;
-    const seen = new Set(a.map((m) => m.id));
-    for (const m of detectFrom(img, iw, ih, 1000)) if (!seen.has(m.id)) { a.push(m); seen.add(m.id); }
-    return a;
+    const full = await readFrom(img, iw, ih, 4096);
+    if (!full) return null;
+    if (Math.max(iw, ih) > 1500) {
+      const seen = new Set(full.map((m) => m.id));
+      for (const m of (await readFrom(img, iw, ih, 1200)) || []) if (!seen.has(m.id)) { full.push(m); seen.add(m.id); }
+    }
+    return full;
   }
+  // how far away the camera can be and still read 15 mm stickers (≈1.5 px per mm, ~49° across the short side)
+  const reachCm = (w, h) => Math.max(20, Math.round(Math.min(w, h) / 1.5 / 0.92 / 100) * 10);
 
   // ---------- sandbox ----------
   function sandboxFresh() {
@@ -554,7 +607,8 @@
     ph.img = img;
     st.vt.photo = { z: 1, x: 0, y: 0 };
     await new Promise((r) => setTimeout(r, 30)); // let the "reading" banner paint
-    const dets = detectPhoto(img);
+    const dets = await readPhoto(img);
+    if (ph.img !== img) return; // a newer photo took over while this one was reading
     ph.busy = false;
     if (!dets) { ph.error = 'The marker reader did not load. Check the connection and reload.'; ph.dets = []; ph.scene = null; refresh(); return; }
     ph.dets = dets;
@@ -604,7 +658,7 @@
     }
     video.srcObject = lv.stream; video.hidden = false;
     try { await video.play(); } catch (e) { /* autoplay with muted is fine */ }
-    lv.running = true; lv.smooth.clear();
+    lv.running = true; lv.busy = false; lv.lastSeen = 0; lv.smooth.clear();
     renderStageChrome();
     requestAnimationFrame(liveTick);
   }
@@ -614,31 +668,40 @@
     if (lv.stream) lv.stream.getTracks().forEach((t) => t.stop());
     lv.stream = null; video.srcObject = null; video.hidden = true; lv.scene = null;
   }
-  function liveTick(now) {
+  // Live: read every frame at full video resolution; the worker sets the pace (a few reads a second)
+  function liveTick() {
     const lv = st.live;
     if (!lv.running || st.mode !== 'live') return;
-    if (video.readyState >= 2 && video.videoWidth) {
-      const t0 = performance.now();
-      const raw = detectFrom(video, video.videoWidth, video.videoHeight, lv.res) || [];
-      const dt = performance.now() - t0;
-      if (dt > 110 && lv.res > 640) lv.res -= 80; else if (dt < 45 && lv.res < 1280) lv.res += 40;
-      // smooth corners per marker, hold briefly when a marker flickers out
-      const seen = new Set();
-      for (const m of raw) {
-        seen.add(m.id);
-        const s = lv.smooth.get(m.id);
-        if (s && now - s.t < 500 && V.dist(s.corners[0], m.corners[0]) < 40) {
-          s.corners = s.corners.map((c, i) => V.lerp(c, m.corners[i], 0.55)); s.t = now; s.hd = m.hd;
-        } else lv.smooth.set(m.id, { id: m.id, hd: m.hd, corners: m.corners, t: now });
-      }
-      for (const [id, s] of lv.smooth) if (!seen.has(id) && now - s.t > 400) lv.smooth.delete(id);
-      const dets = [...lv.smooth.values()];
-      lv.scene = dets.length ? E.solveScene(dets, st.cfg, { imgW: video.videoWidth, imgH: video.videoHeight, dial: st.manualDial }) : null;
-      ensureSelection(lv.scene);
-      draw();
-      if (now - lv.lastPanel > 300) { lv.lastPanel = now; renderChrome(lv.scene); }
+    if (!lv.busy && video.readyState >= 2 && video.videoWidth) {
+      lv.busy = true;
+      const vw = video.videoWidth, vh = video.videoHeight;
+      readFrom(video, vw, vh, 1920).then((raw) => {
+        lv.busy = false;
+        if (!lv.running || st.mode !== 'live') return;
+        liveUpdate(raw || [], performance.now(), vw, vh);
+      });
     }
     requestAnimationFrame(liveTick);
+  }
+  function liveUpdate(raw, now, vw, vh) {
+    const lv = st.live;
+    lv.vw = vw; lv.vh = vh;
+    // smooth corners per marker, hold briefly when a marker flickers out
+    const seen = new Set();
+    for (const m of raw) {
+      seen.add(m.id);
+      const s = lv.smooth.get(m.id);
+      if (s && now - s.t < 900 && V.dist(s.corners[0], m.corners[0]) < 40) {
+        s.corners = s.corners.map((c, i) => V.lerp(c, m.corners[i], 0.6)); s.t = now; s.hd = m.hd;
+      } else lv.smooth.set(m.id, { id: m.id, hd: m.hd, corners: m.corners, t: now });
+    }
+    for (const [id, s] of lv.smooth) if (!seen.has(id) && now - s.t > 800) lv.smooth.delete(id);
+    const dets = [...lv.smooth.values()];
+    if (dets.length) lv.lastSeen = now;
+    lv.scene = dets.length ? E.solveScene(dets, st.cfg, { imgW: vw, imgH: vh, dial: st.manualDial }) : null;
+    ensureSelection(lv.scene);
+    draw();
+    if (now - lv.lastPanel > 300) { lv.lastPanel = now; renderChrome(lv.scene); }
   }
 
   // ---------- stage chrome (banners, call-to-action cards) ----------
@@ -652,7 +715,7 @@
       if (ph.error) { cta.hidden = false; cta.innerHTML = `<div class="card"><h2>Couldn't read that</h2><p>${ph.error}</p><button type="button" class="btn primary" data-snap>Try another photo</button></div>`; }
       else if (ph.scene && !ph.scene.ok) {
         cta.hidden = false;
-        cta.innerHTML = `<div class="card"><h2>No markers found</h2><p>Shoot from straight above with the whole course in frame, in even light. Glossy stickers and blur are the usual culprits.</p><button type="button" class="btn primary" data-snap>Snap another</button><button type="button" class="btn" id="back-sample">Back to the sample</button></div>`;
+        cta.innerHTML = `<div class="card"><h2>No markers found</h2><p>Shoot from straight above in even light, no more than about ${ph.img ? reachCm(ph.img.naturalWidth, ph.img.naturalHeight) : 150} cm over the table for this camera. Glossy stickers and blur are the usual culprits.</p><button type="button" class="btn primary" data-snap>Snap another</button><button type="button" class="btn" id="back-sample">Back to the sample</button></div>`;
       } else {
         banner.hidden = false;
         const sc = ph.scene;
@@ -667,7 +730,10 @@
       if (lv.running) {
         const sc = lv.scene;
         banner.hidden = false;
-        banner.innerHTML = sc && sc.ok ? `<span class="pill">live</span> ${sc.boats.length} boats${sc.wind.src === 'manual' ? ' · dial not in view' : ''}` : '<span class="pill">live</span> Looking for markers…';
+        const reach = lv.vw ? reachCm(lv.vw, lv.vh) : 80;
+        banner.innerHTML = sc && sc.ok
+          ? `<span class="pill">live</span> ${sc.boats.length} boats${sc.wind.src === 'manual' ? ' · dial not in view' : ''}`
+          : `<span class="pill">live</span> Looking for markers. Hold the phone flat, no more than about ${reach} cm above the table.`;
       } else {
         cta.hidden = false;
         cta.innerHTML = lv.error
@@ -787,10 +853,10 @@
     const v = parseFloat(inp.value);
     if (!isFinite(v) || v <= 0) { fillSettings(); return; }
     if (inp.dataset.k) st.cfg[inp.dataset.k] = v; else st.cfg.marker[inp.dataset.m] = v;
-    store.set('cfg', st.cfg);
+    store.set('cfg15', st.cfg);
     resolveCamera(); refresh();
   }));
-  $('#reset-settings').onclick = () => { st.cfg = E.config(); store.set('cfg', null); fillSettings(); resolveCamera(); refresh(); };
+  $('#reset-settings').onclick = () => { st.cfg = E.config(); store.set('cfg15', null); fillSettings(); resolveCamera(); refresh(); };
 
   function markerSVG(id) {
     const c = E.CODES[id], bits = c.map((b) => b.toString(2).padStart(8, '0')).join('').slice(0, 16);

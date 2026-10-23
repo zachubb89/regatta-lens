@@ -51,16 +51,16 @@
         <label class="field" for="set-tickDeg">One dial tick, °<input id="set-tickDeg" type="number" step="1" min="5" max="45" data-k="tickDeg"></label>
         <label class="field" for="set-lowest">Lowest "lower" angle, °<input id="set-lowest" type="number" step="5" min="60" max="180" data-k="lowest"></label>
       </div>
-      <h3>Printed marker sizes (black square edge)</h3>
+      <h3>Printed marker sizes (black square only, not the white edge)</h3>
       <div class="fields">
-        <label class="field" for="set-m-wind">Wind hub, mm<input id="set-m-wind" type="number" step="0.5" min="8" max="120" data-m="wind"></label>
-        <label class="field" for="set-m-course">Course base, mm<input id="set-m-course" type="number" step="0.5" min="8" max="120" data-m="course"></label>
-        <label class="field" for="set-m-boat">Boats, mm<input id="set-m-boat" type="number" step="0.5" min="8" max="80" data-m="boat"></label>
-        <label class="field" for="set-m-mark">Course marks, mm<input id="set-m-mark" type="number" step="0.5" min="8" max="80" data-m="mark"></label>
+        <label class="field" for="set-m-wind">Wind hub, mm<input id="set-m-wind" type="number" step="0.1" min="6" max="120" data-m="wind"></label>
+        <label class="field" for="set-m-course">Course base, mm<input id="set-m-course" type="number" step="0.1" min="6" max="120" data-m="course"></label>
+        <label class="field" for="set-m-boat">Boats, mm<input id="set-m-boat" type="number" step="0.1" min="6" max="80" data-m="boat"></label>
+        <label class="field" for="set-m-mark">Course marks, mm<input id="set-m-mark" type="number" step="0.1" min="6" max="80" data-m="mark"></label>
       </div>
       <div class="actions"><button type="button" class="btn" id="reset-settings">Reset to defaults</button></div>
       <h3>Markers</h3>
-      <p>Each piece wears one square. The top edge is the boat's bow, the wind arrow's upwind end, and the course base's "toward the finish" side.</p>
+      <p>Each piece wears one 15 mm sticker: a 12.5 mm code with a 1.25 mm white edge. Keep the white edge; it's how the camera finds the code. The top edge is the boat's bow, the wind arrow's upwind end, and the course base's "toward the finish" side.</p>
       <div class="marker-grid" id="marker-grid"></div>
       <div class="actions"><button type="button" class="btn primary" id="save-markers">Save printable markers (PDF)</button></div>
       <p class="status" id="save-status"></p>
@@ -75,13 +75,13 @@
       <p>Regatta Lens reads small black-and-white squares on your pieces, works out where every boat sits on the table, and draws your legal moves on top: how far each card takes you, who you'd steal wind from, who has right of way, and where the laylines are.</p>
       <h3>Set up once</h3>
       <ol>
-        <li>Print the marker sheet at 100% (Settings → Save printable markers). Matte paper; gloss glares.</li>
+        <li>Print the sticker sheet at 100% (Settings → Save printable markers). Matte paper; gloss glares. Each sticker is 15 mm square.</li>
         <li>Wind marker on the dial's rotating arrow hub, top edge upwind. Course marker on the fixed base, top edge toward the finish.</li>
         <li>One boat marker flat on each meeple, top edge = bow. Course-mark markers on top of the cylinders.</li>
       </ol>
       <h3>On your turn</h3>
       <ol>
-        <li>Photo: snap the table from above. Live: point the camera at it.</li>
+        <li>Photo: snap the table from above; a normal phone photo reads the stickers from about 2 m. Live: hold the phone flat, no more than about 80 cm over the table.</li>
         <li>Tap your boat. Tap a move to see the cards laid out and what it costs you.</li>
       </ol>
       <h3>Reading the overlay</h3>

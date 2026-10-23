@@ -12,13 +12,17 @@ const head = `<title>Regatta Lens</title>
 <style>
 ${R('src/app.css')}
 </style>`;
+const ARUCO = ['https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/cv.js', 'https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/aruco.js'];
 const body = `${R('src/app.html')}
-<script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/cv.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/aruco.js"></script>
+${ARUCO.map((u) => `<script src="${u}"></script>`).join('\n')}
 <script>window.REGATTA_SAMPLE = "data:image/jpeg;base64,${sample}";
-window.REGATTA_MARKERS_PDF = "${pdf}";</script>
+window.REGATTA_MARKERS_PDF = "${pdf}";
+window.REGATTA_ARUCO_URLS = ${JSON.stringify(ARUCO)};</script>
 <script>
 ${R('src/engine.js')}
+</script>
+<script id="reader-src">
+${R('src/reader.js')}
 </script>
 <script>
 ${R('src/app.js')}

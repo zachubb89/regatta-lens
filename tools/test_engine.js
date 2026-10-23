@@ -6,40 +6,33 @@ global.CV = require('../node_modules/js-aruco2/src/cv.js').CV;
 const { AR } = require('../node_modules/js-aruco2/src/aruco.js');
 const E = require('../src/engine.js');
 
-AR.DICTIONARIES.REGATTA_4X4 = { nBits: 16, tau: 2, codeList: E.CODES };
+const R = require('../src/reader.js');
+const KNOWN = [0, 1, 10, 11, 12, 13, 14, 20, 21, 22, 23];
 
 const dir = process.argv[2] || path.join(__dirname, '../test');
-const png = PNG.sync.read(fs.readFileSync(path.join(dir, 'sample.png')));
-const truth = JSON.parse(fs.readFileSync(path.join(dir, 'truth.json')));
 
-function detect(img, maxW) {
-  // downscale like the browser does
-  const k = Math.min(1, maxW / img.width);
-  const w = Math.round(img.width * k), h = Math.round(img.height * k);
-  const data = new Uint8ClampedArray(w * h * 4);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const sx = Math.min(img.width - 1, Math.round(x / k)), sy = Math.min(img.height - 1, Math.round(y / k));
-    const si = (sy * img.width + sx) * 4, di = (y * w + x) * 4;
-    data[di] = img.data[si]; data[di + 1] = img.data[si + 1]; data[di + 2] = img.data[si + 2]; data[di + 3] = 255;
-  }
-  const det = new AR.Detector({ dictionaryName: 'REGATTA_4X4' });
+function load(name) { return PNG.sync.read(fs.readFileSync(path.join(dir, name))); }
+// read markers the way the app does: full resolution (tiled inside the reader)
+function detect(png) {
   const t0 = Date.now();
-  const ms = det.detect({ width: w, height: h, data });
-  // (the app also runs a second, smaller pass and merges by id)
-  const dt = Date.now() - t0;
-  return { markers: ms.map((m) => ({ id: m.id, hd: m.hammingDistance, corners: m.corners.map((c) => ({ x: c.x / k, y: c.y / k })) })), dt, w, h };
+  const ms = R.detect({ width: png.width, height: png.height, data: png.data }, { AR, CV, codes: E.CODES, ids: KNOWN });
+  return { markers: ms, dt: Date.now() - t0, w: png.width, h: png.height };
 }
 
 const cfg = E.config();
 let fails = 0;
 const check = (cond, msg) => { console.log((cond ? '  ok   ' : '  FAIL ') + msg); if (!cond) fails++; };
 
-for (const maxW of [1200, 960, 720]) {
-  const r = detect(png, maxW);
+const shots = ['sample.png', 'phone.png'].filter((f) => fs.existsSync(path.join(dir, f)));
+let png = null;
+let truth = null;
+for (const shot of shots) {
+  png = load(shot);
+  truth = JSON.parse(fs.readFileSync(path.join(dir, 'truth-' + shot.replace('.png', '') + '.json')));
+  const r = detect(png);
   const ids = r.markers.map((m) => m.id).sort((a, b) => a - b);
-  console.log(`\n== detect at ${r.w}x${r.h}: ${r.dt} ms, ids ${JSON.stringify(ids)}`);
-  if (maxW !== 1200) { console.log('  info  (lower res is only informational)'); continue; }
-  check(JSON.stringify(ids) === JSON.stringify([0, 1, 10, 11, 12, 13, 14, 20, 21]), 'all 9 markers found, no strays');
+  console.log(`\n== ${shot} ${r.w}x${r.h}: ${r.dt} ms, ids ${JSON.stringify(ids)}`);
+  check(JSON.stringify(ids) === JSON.stringify([0, 1, 10, 11, 12, 13, 14, 20, 21]), 'all 9 stickers found, no strays');
 
   // corner order: corner 0 should be marker top-left in plane truth
   const scene = E.solveScene(r.markers, cfg, { imgW: png.width, imgH: png.height });
@@ -53,20 +46,26 @@ for (const maxW of [1200, 960, 720]) {
   const T = truth.markers;
   const tpos = (id) => ({ x: T[id].pos[0], y: T[id].pos[1] });
   const spos = (id) => (id === 0 ? scene.windMarker.pos : id === 1 ? scene.courseMarker.pos : (scene.boats.find((b) => b.id === id) || scene.marks[id]).pos);
-  let maxErr = 0;
+  // local = pieces within 30 cm of each other (what moves, shadows and right of way use); global = whole course
+  let maxErr = 0, maxRel = 0, localErr = 0;
   const idsAll = [0, 1, 10, 11, 12, 13, 14, 20, 21];
   for (let i = 0; i < idsAll.length; i++) for (let j = i + 1; j < idsAll.length; j++) {
     const dt = E.V.dist(tpos(idsAll[i]), tpos(idsAll[j])), ds = E.V.dist(spos(idsAll[i]), spos(idsAll[j]));
     maxErr = Math.max(maxErr, Math.abs(dt - ds));
+    maxRel = Math.max(maxRel, Math.abs(dt - ds) / dt);
+    if (dt < 300) localErr = Math.max(localErr, Math.abs(dt - ds));
   }
-  check(maxErr < 12, `pairwise distance error max ${maxErr.toFixed(1)} mm (course is ~900 mm long)`);
+  const big = png.width * png.height > 6e6;
+  check(localErr < (big ? 3 : 6), `nearby pieces: distance error max ${localErr.toFixed(1)} mm`);
+  check(big ? maxErr < 8 : maxRel < 0.03, `whole course: distance error max ${maxErr.toFixed(1)} mm (${(maxRel * 100).toFixed(1)}%)`);
+  console.log('  info  fit rms', scene.fitRms && scene.fitRms.toFixed(4), 'warnings', JSON.stringify(scene.warnings));
 
   // tacks + heading angle relative to wind
   for (const b of scene.boats) {
     const tb = T[b.id];
     const tu = { x: T[0].up[0], y: T[0].up[1] }, th = { x: tb.up[0], y: tb.up[1] };
     const ta = E.signedAngle(tu, th) / E.DEG, sa = E.signedAngle(scene.wind.u, b.heading) / E.DEG;
-    check(b.tack === tb.tack && Math.abs(ta - sa) < 4, `${b.name.padEnd(9)} ${b.tack.padEnd(9)} off-wind ${sa.toFixed(1)}° (truth ${ta.toFixed(1)}°) turn #${b.turn} ${b.lift || ''}`);
+    check(b.tack === tb.tack && Math.abs(ta - sa) < (big ? 2 : 3), `${b.name.padEnd(9)} ${b.tack.padEnd(9)} off-wind ${sa.toFixed(1)}° (truth ${ta.toFixed(1)}°) turn #${b.turn} ${b.lift || ''}`);
   }
   console.log('  turn order:', scene.order.map((id) => E.BOATS.find((b) => b.id === id).name).join(' > '));
   for (const b of scene.boats) {
@@ -74,12 +73,12 @@ for (const maxW of [1200, 960, 720]) {
     const fmt = (o) => `${o.label}${o.blocked ? ` [BLOCKED ${o.blocked.reason} ${o.blocked.name} @${(o.travelled / cfg.cardW).toFixed(2)}c]` : ''}${o.receive.length ? ' +dirty from ' + o.receive.map((x) => x.name) : ''}${o.give.length ? ' gives dirty to ' + o.give.map((x) => x.name) : ''}`;
     console.log(`  ${b.name}: ` + mv.options.map(fmt).join(' | ') + (mv.fetch && Object.keys(mv.fetch).length ? `  fetch ${JSON.stringify(Object.fromEntries(Object.entries(mv.fetch).map(([k, v]) => [k, v && +v.toFixed(1)])))}` : ''));
   }
-  fs.writeFileSync(path.join(dir, 'detections.json'), JSON.stringify(r.markers));
 }
 
 // manual-wind fallback: drop the dial marker
 {
-  const r = detect(png, 1200);
+  png = load(shots[0]);
+  const r = detect(png);
   const noDial = r.markers.filter((m) => m.id !== 0);
   const s2 = E.solveScene(noDial, cfg, { imgW: png.width, imgH: png.height, dial: 1 });
   check(s2.ok && s2.wind.src === 'manual' && s2.course.src === 'course', 'no dial in view -> course marker + manual dial');
